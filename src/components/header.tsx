@@ -2,41 +2,72 @@
 
 import { LogIn, UserRound } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { SignOutButton } from "@/components/sign-out-button";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { createClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
+  { label: "Search", href: "/search" },
   { label: "Planner", href: "/planner" },
   { label: "Alerts", href: "/alerts" },
 ];
 
 export function Header() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const pathname = usePathname();
+
+  const isPathActive = (href: string) =>
+    pathname === href || pathname?.startsWith(`${href}/`);
+
+  const navBaseClasses =
+    "gap-2 relative after:absolute after:bottom-0 after:left-0 after:h-[2px] after:w-full after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-200 after:ease-out after:content-[''] hover:after:scale-x-100";
+
+  const desktopExtras =
+    "md:after:left-1/2 md:after:-translate-x-1/2 md:after:origin-center";
+
+  const getNavClasses = (href: string, extra?: string) =>
+    cn(
+      navBaseClasses,
+      desktopExtras,
+      extra,
+      isPathActive(href) && "after:scale-x-100",
+    );
 
   useEffect(() => {
     const supabase = createClient();
 
-    void supabase.auth.getUser().then(({ data }) => {
-      setUserEmail(data.user?.email ?? null);
-    });
+    void supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        setUserEmail(data.user?.email ?? null);
+        setIsAuthLoading(false);
+      })
+      .catch(() => {
+        setIsAuthLoading(false);
+      });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUserEmail(session?.user?.email ?? null);
+      setIsAuthLoading(false);
     });
 
     return () => {
@@ -45,9 +76,13 @@ export function Header() {
   }, []);
 
   const renderDesktopNav = () => (
-    <nav className="hidden items-center gap-2 md:flex">
+    <nav className="flex items-center gap-2">
       {NAV_ITEMS.map((item) => {
-        if (item.href === "/alerts") {
+        if (
+          item.href === "/search" ||
+          item.href === "/alerts" ||
+          item.href === "/planner"
+        ) {
           return (
             <Button
               key={item.label}
@@ -55,9 +90,14 @@ export function Header() {
               type="button"
               variant="ghost"
               size="sm"
-              className="gap-2"
+              className={getNavClasses(item.href)}
             >
-              <Link href={item.href}>{item.label}</Link>
+              <Link href={item.href}>
+                {item.href === "/planner" && (
+                  <Badge variant="outline">AI</Badge>
+                )}
+                {item.label}
+              </Link>
             </Button>
           );
         }
@@ -88,26 +128,35 @@ export function Header() {
 
   return (
     <header className="border-b bg-card/50 backdrop-blur-sm">
-      <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-4">
+      <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-4 relative">
         <Link href="/" className="flex items-center gap-3">
           <span className="text-2xl" role="img" aria-label="flight">
             ✈️
           </span>
           <span className="text-2xl font-bold tracking-tight">GrayPane</span>
         </Link>
-        <div className="flex items-center gap-2">
+
+        {/* Centered Navigation */}
+        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex">
           {renderDesktopNav()}
-          {isAuthenticated ? (
+        </div>
+
+        <div className="flex items-center gap-2 min-w-[160px] justify-end">
+          {isAuthLoading ? (
+            <Skeleton className="h-9 w-[140px]" />
+          ) : isAuthenticated ? (
             <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="gap-2 px-3"
+                  className="gap-2 px-3 min-w-[140px] justify-center"
                 >
                   <UserRound className="h-4 w-4" aria-hidden="true" />
-                  <span className="max-w-[160px] truncate">{userEmail}</span>
+                  <span className="max-w-[160px] truncate">
+                    {userEmail?.split("@")[0]}
+                  </span>
                 </Button>
               </PopoverTrigger>
               <PopoverContent
@@ -120,6 +169,51 @@ export function Header() {
               >
                 <div className="space-y-1 md:hidden">
                   {NAV_ITEMS.map((item) => {
+                    if (item.href === "/search") {
+                      return (
+                        <Button
+                          key={item.label}
+                          asChild
+                          variant="ghost"
+                          size="sm"
+                          className={getNavClasses(
+                            item.href,
+                            "w-full justify-start gap-2 after:-bottom-1",
+                          )}
+                        >
+                          <Link
+                            href={item.href}
+                            onClick={() => setIsPopoverOpen(false)}
+                          >
+                            <span>{item.label}</span>
+                          </Link>
+                        </Button>
+                      );
+                    }
+
+                    if (item.href === "/planner") {
+                      return (
+                        <Button
+                          key={item.label}
+                          asChild
+                          variant="ghost"
+                          size="sm"
+                          className={getNavClasses(
+                            item.href,
+                            "w-full justify-start gap-2 after:-bottom-1",
+                          )}
+                        >
+                          <Link
+                            href={item.href}
+                            onClick={() => setIsPopoverOpen(false)}
+                          >
+                            <Badge variant="outline">AI</Badge>
+                            <span>{item.label}</span>
+                          </Link>
+                        </Button>
+                      );
+                    }
+
                     if (item.href === "/alerts") {
                       return (
                         <Button
@@ -127,16 +221,16 @@ export function Header() {
                           asChild
                           variant="ghost"
                           size="sm"
-                          className="w-full justify-between gap-2"
+                          className={getNavClasses(
+                            item.href,
+                            "w-full justify-start gap-2 after:-bottom-1",
+                          )}
                         >
                           <Link
                             href={item.href}
                             onClick={() => setIsPopoverOpen(false)}
                           >
                             <span>{item.label}</span>
-                            <span className="text-xs text-muted-foreground">
-                              View alerts
-                            </span>
                           </Link>
                         </Button>
                       );
@@ -148,13 +242,10 @@ export function Header() {
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="w-full justify-between gap-2"
+                        className="w-full justify-start gap-2"
                         disabled
                       >
                         <span>{item.label}</span>
-                        <span className="text-xs text-muted-foreground">
-                          Coming soon
-                        </span>
                       </Button>
                     );
                   })}
@@ -181,7 +272,12 @@ export function Header() {
               </PopoverContent>
             </Popover>
           ) : (
-            <Button asChild variant="outline" size="sm" className="gap-2 px-3">
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className="gap-2 px-3 min-w-[140px] justify-center"
+            >
               <Link href="/login">
                 <LogIn className="h-4 w-4" aria-hidden="true" />
                 <span>Login</span>
