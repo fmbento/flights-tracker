@@ -5,11 +5,6 @@
 
 import { AlertType } from "@/core/alert-types";
 import {
-  getAirportByIata,
-  getAlertsByUser,
-  updateAlert,
-} from "@/core/alerts.db";
-import {
   createNotificationWithAlerts,
   hasAlertBeenProcessedRecently,
   hasUserReceivedEmailToday,
@@ -27,6 +22,7 @@ import type { WorkerEnv } from "../env";
 import { fetchFlightDataForAlerts } from "../utils/flights-search";
 import { workerLogger } from "../utils/logger";
 import { getUserEmail } from "../utils/user";
+import { getAirportByIata, getAlertsByUser, updateAlert } from "./alerts.db";
 
 const DEDUPLICATION_HOURS = 23;
 const MAX_FLIGHTS_PER_ALERT = 5;
@@ -94,7 +90,10 @@ async function filterUnprocessedAlerts(alerts: Alert[]): Promise<Alert[]> {
 /**
  * Checks and updates expired alerts (parallelized DB updates)
  */
-async function filterAndUpdateExpiredAlerts(alerts: Alert[]): Promise<Alert[]> {
+async function filterAndUpdateExpiredAlerts(
+  env: WorkerEnv,
+  alerts: Alert[],
+): Promise<Alert[]> {
   const now = new Date();
   const activeAlerts: Alert[] = [];
   const expiredAlerts: Alert[] = [];
@@ -119,7 +118,7 @@ async function filterAndUpdateExpiredAlerts(alerts: Alert[]): Promise<Alert[]> {
     });
     await Promise.all(
       expiredAlerts.map((alert) =>
-        updateAlert(alert.id, { status: "completed" }),
+        updateAlert(env, alert.id, { status: "completed" }),
       ),
     );
   }
@@ -131,14 +130,15 @@ async function filterAndUpdateExpiredAlerts(alerts: Alert[]): Promise<Alert[]> {
  * Converts alert to descriptor for email (parallelized airport lookups)
  */
 async function convertAlertToDescriptor(
+  env: WorkerEnv,
   alert: Alert,
 ): Promise<AlertDescriptor> {
   const { route, filters } = alert.filters;
 
   // Fetch both airports in parallel
   const [fromAirport, toAirport] = await Promise.all([
-    getAirportByIata(route.from),
-    getAirportByIata(route.to),
+    getAirportByIata(env, route.from),
+    getAirportByIata(env, route.to),
   ]);
 
   const fromName = fromAirport
@@ -189,12 +189,13 @@ async function convertAlertToDescriptor(
  * Formats alerts with flights for email (parallelized airport lookups)
  */
 async function formatAlertsForEmail(
+  env: WorkerEnv,
   alertsWithFlights: AlertWithFlights[],
 ): Promise<DailyAlertSummary[]> {
   // Convert all alerts in parallel for optimal performance
   const summaries = await Promise.all(
     alertsWithFlights.map(async ({ alert, flights }) => ({
-      alert: await convertAlertToDescriptor(alert),
+      alert: await convertAlertToDescriptor(env, alert),
       flights,
       generatedAt: new Date().toISOString(),
     })),
@@ -281,7 +282,7 @@ export async function processDailyAlertsForUser(
     }
 
     // 3. Get active daily alerts (reuse existing function)
-    const allAlerts = await getAlertsByUser(userId, "active");
+    const allAlerts = await getAlertsByUser(env, userId, "active");
     const dailyAlerts = allAlerts.filter(
       (alert) => alert.type === AlertType.DAILY,
     );
@@ -296,7 +297,10 @@ export async function processDailyAlertsForUser(
     }
 
     // 4. Filter expired alerts (updates DB in parallel)
-    const nonExpiredAlerts = await filterAndUpdateExpiredAlerts(dailyAlerts);
+    const nonExpiredAlerts = await filterAndUpdateExpiredAlerts(
+      env,
+      dailyAlerts,
+    );
     if (nonExpiredAlerts.length === 0) {
       return { success: true, reason: "all-expired" };
     }
@@ -335,7 +339,7 @@ export async function processDailyAlertsForUser(
     }
 
     // 7. Format and send email
-    const alertSummaries = await formatAlertsForEmail(alertsWithFlights);
+    const alertSummaries = await formatAlertsForEmail(env, alertsWithFlights);
 
     const payload: DailyPriceUpdateEmail = {
       type: "daily-price-update",
