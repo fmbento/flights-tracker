@@ -1,10 +1,10 @@
-import { createOpenAI } from "@ai-sdk/openai";
 import { generateObject } from "ai";
 
 import { env } from "@/env";
+import { logger } from "@/lib/logger";
 import { type EmailBlueprint, EmailBlueprintSchema } from "./ai-email-schemas";
 
-const MODEL_ID = "openai/gpt-5-mini";
+const MODEL_ID = "openai/gpt-4o-mini";
 
 const BASE_BLUEPRINT: EmailBlueprint = {
   metadata: {
@@ -45,25 +45,19 @@ async function generateBlueprint(
   const contextJson = JSON.stringify({ type, data: context }, null, 2);
   const baselineJson = JSON.stringify(fallback, null, 2);
 
-  // Get API key from environment
-  const apiKey = env.AI_GATEWAY_API_KEY;
-
-  if (!apiKey) {
-    console.warn(
-      "AI_GATEWAY_API_KEY not found in environment, using fallback email rendering",
-    );
+  // Check if AI Gateway is configured
+  if (!env.AI_GATEWAY_API_KEY) {
+    logger.info("AI Gateway not configured, using fallback email rendering", {
+      feature: "ai-email-generation",
+      status: "disabled",
+    });
     return null; // Return null to trigger fallback rendering with actual flight data
   }
 
   try {
-    // Use OpenRouter via OpenAI-compatible API
-    const openrouter = createOpenAI({
-      apiKey,
-      baseURL: "https://openrouter.ai/api/v1",
-    });
-
+    // Use Vercel AI Gateway - automatically uses AI_GATEWAY_API_KEY from environment
     const result = await generateObject({
-      model: openrouter(MODEL_ID),
+      model: MODEL_ID,
       system:
         "You are FlightTrack Mailwright, crafting structured, engaging flight alert emails. Follow the provided email blueprint schema exactly. Keep language professional, concise, and actionable. Avoid markdown—use plain sentences.",
       prompt: `${prompt}\n\nContext JSON:\n${contextJson}\n\nBase blueprint example:\n${baselineJson}\n\nReturn a JSON object that matches the schema.`,
@@ -80,10 +74,11 @@ async function generateBlueprint(
     }
   } catch (error) {
     // Log error and use fallback rendering with actual flight data
-    console.warn(
-      "AI email generation failed, using fallback email rendering:",
-      error,
-    );
+    logger.warn("AI email generation failed, using fallback email rendering", {
+      feature: "ai-email-generation",
+      error: error instanceof Error ? error.message : String(error),
+      fallback: "basic-template",
+    });
   }
 
   return null; // Return null to trigger fallback rendering with actual flight data

@@ -21,41 +21,69 @@ export interface AlertWithFlights {
 
 /**
  * Converts alert filters to flight filters input for the search API
+ * NOTE: For daily alerts, the date range (dateFrom/dateTo) represents a search window
+ * for one-way flights, not specific round-trip dates.
  * @param alertFilters - Alert filters from database
- * @returns FlightFiltersInput for searchFlights
+ * @returns FlightFiltersInput for searchFlights or null if alert is expired
  */
 function convertAlertFiltersToFlightFilters(
   alertFilters: AlertFilters,
-): FlightFiltersInput {
+): FlightFiltersInput | null {
   const { route, filters } = alertFilters;
 
-  // Determine trip type
-  const tripType =
-    filters?.dateTo && filters.dateTo !== filters.dateFrom
-      ? TripType.ROUND_TRIP
-      : TripType.ONE_WAY;
+  // Calculate date adjustments
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  // Build segments
+  // Use tomorrow to avoid timezone validation issues
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().split("T")[0];
+
+  // Check if entire date range has expired
+  if (filters?.dateTo) {
+    const endDate = new Date(filters.dateTo);
+    endDate.setHours(0, 0, 0, 0);
+
+    if (endDate < today) {
+      logger.info("Alert date range has fully expired, skipping", {
+        dateTo: filters.dateTo,
+        today: today.toISOString().split("T")[0],
+      });
+      return null;
+    }
+  }
+
+  // Adjust start date if it's in the past
+  let effectiveDateFrom = filters?.dateFrom;
+  if (effectiveDateFrom) {
+    const startDate = new Date(effectiveDateFrom);
+    startDate.setHours(0, 0, 0, 0);
+
+    if (startDate < today) {
+      effectiveDateFrom = tomorrowStr;
+      logger.info("Alert start date has passed, adjusting search date", {
+        originalDate: filters.dateFrom,
+        adjustedDate: effectiveDateFrom,
+      });
+    }
+  } else {
+    effectiveDateFrom = tomorrowStr;
+  }
+
+  // Daily alerts always use ONE_WAY (date range is a search window, not round-trip dates)
+  const tripType = TripType.ONE_WAY;
+
+  // Single segment for one-way flight
   const segments = [
     {
       origin: route.from,
       destination: route.to,
-      departureDate: filters?.dateFrom,
+      departureDate: effectiveDateFrom,
       departureTimeRange: filters?.departureTimeRange,
       arrivalTimeRange: filters?.arrivalTimeRange,
     },
   ];
-
-  // Add return segment for round trips
-  if (tripType === TripType.ROUND_TRIP && filters?.dateTo) {
-    segments.push({
-      origin: route.to,
-      destination: route.from,
-      departureDate: filters.dateTo,
-      departureTimeRange: undefined,
-      arrivalTimeRange: undefined,
-    });
-  }
 
   // Map alert Stops to MaxStops enum
   const stopsMap: Record<string, MaxStops> = {
@@ -79,15 +107,13 @@ function convertAlertFiltersToFlightFilters(
     ? (seatTypeMap[filters.class] ?? SeatType.ECONOMY)
     : SeatType.ECONOMY;
 
+  // Use adjusted dates for the date range
   const input: FlightFiltersInput = {
     tripType,
     segments,
     dateRange: {
-      from: filters?.dateFrom || new Date().toISOString().split("T")[0],
-      to:
-        filters?.dateTo ||
-        filters?.dateFrom ||
-        new Date().toISOString().split("T")[0],
+      from: effectiveDateFrom,
+      to: filters?.dateTo || effectiveDateFrom,
     },
     seatType,
     stops,
@@ -120,6 +146,11 @@ async function fetchFlightsForAlert(
   try {
     // Convert alert filters to flight search input
     const flightFilters = convertAlertFiltersToFlightFilters(alert.filters);
+
+    // Skip if date range has expired
+    if (!flightFilters) {
+      return null;
+    }
 
     // Validate and parse the input
     const validatedFilters = parseFlightFiltersInput(flightFilters);

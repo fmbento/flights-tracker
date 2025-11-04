@@ -183,10 +183,13 @@ export const FlightSegmentSchema = z
   .refine(
     (data) => {
       // Validate that travel date is not in the past
-      const travelDate = new Date(data.travelDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return travelDate >= today;
+      // Compare both dates in UTC to avoid timezone issues
+      const travelDate = new Date(`${data.travelDate}T00:00:00Z`);
+      const now = new Date();
+      const todayUTC = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
+      return travelDate >= todayUTC;
     },
     { message: "Travel date cannot be in the past" },
   )
